@@ -22,9 +22,12 @@
 # - 4 - going to the game bin folder fails
 # - 5 - no STEAM_GAMES_FOLDER
 
-progname="Hammer Editor Manager Script"
+progname="SledgeHammer.sh"
 
 [ "$DEBUG" ] && set -x
+
+# watchdog is enabled by default except if explicitly disabled
+WATCHDOG=${WATCHDOG:-"t"}
 
 function echo_error() {
 	local RED='\033[0;31m'
@@ -74,16 +77,29 @@ function getLatestHPP() {
 
 	echo_error \
 		"Changing necessary settings to have the 'Run Map...' button working properly"
-	#edit GameExe to have sensible linux path
-  #$XDG_CONFIG_HOME/hammerplusplus/hammerplusplus_gameconfig.txt
 
+	# WARNING: THIS DOES NOT WORK - HAMMER SPAWNS CONHOST WHICH `cd`s
+	#					 INTO COMMANDS PROVIDED, STRIPPING EXECUTABLE NAMES
+	#					 WHICH MEANS WE CANNOT USE A NATIVE SOLUTION IN ORDER TO SPAWN THE GAME.
+	#					 TO FIX THIS ISSUE, WE SUPERSET CONHOST ENTIRELY, SEEING AS
+	# 				 HAMMER++ DOES NOT EVEN NEED CONHOST TO HAVE RUN PROPERLY IN ORDER TO
+	#					 CONTINUE EXECUTION.
+	#	FIX:		 SEE FUNCTION `hammerWatchdog`.
+	#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   #dumb replace all instances of '$game_exe' with 'start /unix $game_exe'
   #shellcheck disable=SC2016
-  sed -i -e 's/$game_exe/start \/unix $game_exe/' \
-  	"$XDG_CONFIG_HOME"/hammerplusplus/hammerplusplus_sequences.cfg
+  #sed -i -e 's/$game_exe/start \/unix $game_exe/' \
+  #	"$XDG_CONFIG_HOME"/hammerplusplus/hammerplusplus_sequences.cfg
+
   #also add .vmf to all '$file' instances
   perl -pi -e 's/(?<!\s)\$file(?!.bsp)/$file.vmf/' \
   	"$XDG_CONFIG_HOME"/hammerplusplus/hammerplusplus_sequences.cfg
+
+  #set expert run mode by default
+  sed -i -e 's/ModeExpert=0/ModeExpert=1/' \
+  	"$XDG_CONFIG_HOME"/hammerplusplus/hammerplusplus_settings.ini
+
+  # compiled maps in custom folder to avoid contaminating game folders
 }
 
 function softlinkAll() {
@@ -119,10 +135,6 @@ function packageManager() {
 		if [[ $entry =~ .+\.[0-9]+ ]]; then
 			#tf2maps entry
 			curl "https://tf2maps.net/downloads/$entry" | grep -P -o '(?<=<div class="bbWrapper">)[\s\S]+(?=<\/div>)'
-
-		elif [[ $entry =~ https://.+/.+/.+ ]]; then
-			#git* entry
-			echo_error "Currently unfinished."
 		else
 			echo_error "Link format not recognized for entry \"$entry\". Skipping."
 			continue
@@ -131,10 +143,14 @@ function packageManager() {
 	[ "$PKGMANONLY" ] && exit 0
 }
 
-#export PIPENAME=hammer_the_pipe
-
 function hammerWatchdog() (
-	progname="Hammer Editor Watchdog"
+
+	SETTINGSFILE="$XDG_CONFIG_HOME"/hammerplusplus/hammerplusplus_settings.ini
+	SEQUENCESFILE="$XDG_CONFIG_HOME"/hammerplusplus/hammerplusplus_sequences.cfg
+	# allow process management
+	set -m
+	
+	progname="SledgeHammer Watchdog"
 
 	echo_wd() {
 		BLUE='\033[1;34m'
@@ -142,36 +158,95 @@ function hammerWatchdog() (
 		echo -e "${BLUE}[ $progname ] $*${CLEAR}" 1>&2
 	}
 
-	echo_wd Started Watchdog
+	getConhost() {
+		pgrep -x 'conhost.exe'
+	}
+
+	getSequence() {
+		echo_wd "Reading last used sequence id."
+		seqnum=$(grep -o -P '(?<=LastSequence=)\d+' "$SETTINGSFILE")
+		echo_wd "Reading last used sequence from json"
+	}
+
+	fixCommand() {
+		
+	}
+
+	getSequence() {
+		#get line number of last sequence
+		linenum=$(grep -m "$((seqnum+1))" -n -o '(?<=^\t{1}").+(?=")' "$SETTINGSFILE" | \
+			tail -n1 | cut -d: -f1)
+		# we get the text in that sequence, then flatten it
+		offset=$((linenum+2))
+		values=$( \
+			tail -n+"$offset" "$SETTINGSFILE" | \
+			head -n$(( \
+				$(grep -m1 -n -o -P '^\t\}' "$SETTINGSFILE" | \
+				cut -d: -f1) - offset )) | \
+			perl -p -e 's/\s+(?=[\"\{\}])//g' \
+			)
+		entries=$(echo "$values" | grep -P -c '\"\d\"')
+	}
+
+	parseEntries() {
+		entry=0
+		while [ "$entries" -gt "$entry" ]; do
+			# https://developer.valvesoftware.com/wiki/Hammer_Run_Map_Expert
+			
+			# check if enabled
+			if [ echo "$entry_data" | \
+				grep -P -o '(?<=enable\"\")1(?=\")') ]; then
+				# element is enabled, collect data to parse
+				cmd=$(echo "$entry_data" | \
+					grep -P -o '(?<=\"specialcmd\"{2}|\"run\"{2}).+(?=\")' | tail -n1)
+				parms=$(echo "$entry_data" | \
+					grep -P -o '(?<=\"parms\"{2}).+(?=\")' | tail -n1)
+				fixCommand
+				else
+					continue
+			fi
+			entry=$(( entry + 1 ))
+		done
+	}
+
+	echo_wd "Started Watchdog"
 	
 	while true; do
-		[ -f "$PIPENAME" ] && break
+		if getConhost; then
+			pid=$(getConhost)
+			break
+		fi
 	done
 
-	echo_wd Found Hammer
+	echo_wd "Found conhost.exe; replacing"
+	kill "$pid"
 
-	while true; do
-		#cat $PIPENAME
-		true
-	done
+	echo_wd "Reading sequence from hammerplusplus cfgs"
+	getSequence
+
+	parseEntries
+
+	execSequence
+	
 )
-#export -f hammerWatchdog
 
 function hammerplusplus_cmd() {
-	#set -m
-	
-	#echo_error Starting Watchdog
-	#hammerWatchdog &
-	#pid=$!
+	if [ "$WATCHDOG" = "t" ]; then
+		set -m
+		echo_error Starting Watchdog
+		hammerWatchdog &
+		pid=$!
+	fi
 	WINEPREFIX=$_wineprefix wine cmd /c start hammerplusplus.exe 2>/dev/null
-		# | tee "$PIPENAME"
-	#echo_error Killing Watchdog
-	#kill $pid
-	#set +m
-}
+	if [ "$WATCHDOG" = "t" ]; then
+		echo_error Killing Watchdog
+		kill "$pid"
+		set +m
+	fi
+	}
 
 
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # if no steam games folder (**/common) has been provided, error out.
 [ ! "$STEAM_GAMES_FOLDER" ] && echo_error "No STEAM_GAMES_FOLDER provided." && exit 5
