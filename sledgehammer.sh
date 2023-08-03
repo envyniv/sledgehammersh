@@ -159,22 +159,56 @@ function hammerWatchdog() (
 	}
 
 	getConhost() {
-		pgrep -x 'conhost.exe'
+		# This is objectively the wrong way to grab conhost, because this could return literally
+		# any instance of conhost, even those not spawned by hammer.
+
+		# However, since wine disconnects from stdout, there is literally nothing i can do to
+		# grab the PPID and compare.
+
+		# basically, this is the best we get
+		pgrep -x 'conhost\.exe' | tail -n1
 	}
 
 	getSequence() {
 		echo_wd "Reading last used sequence id."
 		seqnum=$(grep -o -P '(?<=LastSequence=)\d+' "$SETTINGSFILE")
 		echo_wd "Reading last used sequence from json"
+		parseSequence
 	}
 
 	fixCommand() {
+		# replace arbitrary integers with actual commands
+		case $cmd in
+			257)
+				cmd="cp -f"
+				;;
+			256)
+				cmd="cd"
+				;;
+			258)
+				cmd="rm"
+				;;
+			259)
+				cmd="mv"
+				;;
+			*)
+				winepath -u $cmd 2>/dev/null
+				;;
+		esac
+
 		
+		# replace instances of envvars with actual files
+		#parms=${\$game_exe/$parms//$game_exe/}
+		#parms=${\$game_exe/$parms//$game_exe/}
+		#parms=${\$game_exe/$parms//$game_exe/}
+
+		echo "$cmd $parms"
 	}
 
-	getSequence() {
+	parseSequence() {
+		declare -a sequence
 		#get line number of last sequence
-		linenum=$(grep -m "$((seqnum+1))" -n -o '(?<=^\t{1}").+(?=")' "$SETTINGSFILE" | \
+		linenum=$(grep -m "$((seqnum+1))" -n -o '(?<=^\t{1}").+(?=")' "$SEQUENCESFILE" | \
 			tail -n1 | cut -d: -f1)
 		# we get the text in that sequence, then flatten it
 		offset=$((linenum+2))
@@ -186,22 +220,36 @@ function hammerWatchdog() (
 			perl -p -e 's/\s+(?=[\"\{\}])//g' \
 			)
 		entries=$(echo "$values" | grep -P -c '\"\d\"')
+
+		#$bspdir
+		#$file
+		#$path
+		#$bsp_exe
+		#$vis_exe
+		#$light_exe
 	}
 
 	parseEntries() {
 		entry=0
 		while [ "$entries" -gt "$entry" ]; do
 			# https://developer.valvesoftware.com/wiki/Hammer_Run_Map_Expert
-			
+			entry_data="$(echo "$entries" | tail -n"$( grep -c '\{')")"
 			# check if enabled
-			if [ echo "$entry_data" | \
-				grep -P -o '(?<=enable\"\")1(?=\")') ]; then
+			if echo "$entry_data" | grep -P -o '(?<=enable\"\")1(?=\")'; then
+				
 				# element is enabled, collect data to parse
-				cmd=$(echo "$entry_data" | \
-					grep -P -o '(?<=\"specialcmd\"{2}|\"run\"{2}).+(?=\")' | tail -n1)
+				cond=$(echo "$entry_data" | grep -P -o '(?<=\"specialcmd\"{2}).+(?=\")')
+				if [ "$cond" == "0" ]; then
+					# command has specialrun attrib. takes priority over run.
+					cmd=$cond
+				else
+					# command calls to executable
+					cmd=$(echo "$entry_data" | grep -P -o '(?<=\"run\"{2}).+(?=\")')
+				fi
 				parms=$(echo "$entry_data" | \
 					grep -P -o '(?<=\"parms\"{2}).+(?=\")' | tail -n1)
-				fixCommand
+				sequence["$entry"]=fixCommand
+				
 				else
 					continue
 			fi
@@ -209,31 +257,44 @@ function hammerWatchdog() (
 		done
 	}
 
-	echo_wd "Started Watchdog"
+	execSequence () {
+		for cmd in "${sequence[@]}"; do
+			eval "$cmd"
+		done
+	}
+
+	process() {
+		echo_wd "Started Watchdog"
 	
-	while true; do
-		if getConhost; then
-			pid=$(getConhost)
-			break
-		fi
-	done
+		while true; do
+			if getConhost; then
+				pid=$(getConhost)
+				break
+			fi
+		done
+	
+		echo_wd "Found conhost.exe; replacing"
+		kill "$pid"
+	
+		echo_wd "Reading sequence from hammerplusplus cfgs"
+		getSequence
+	
+		parseEntries
+	
+		execSequence
+	}
 
-	echo_wd "Found conhost.exe; replacing"
-	kill "$pid"
-
-	echo_wd "Reading sequence from hammerplusplus cfgs"
-	getSequence
-
-	parseEntries
-
-	execSequence
+	process
 	
 )
 
 function hammerplusplus_cmd() {
 	if [ "$WATCHDOG" = "t" ]; then
 		set -m
-		echo_error Starting Watchdog
+		echo_error "Starting Watchdog, please close all other WINE processes"
+		echo_error "To avoid killing the wrong things when time comes."
+		echo_error
+		echo_error "See getConhost() for a worse explanation."
 		hammerWatchdog &
 		pid=$!
 	fi
