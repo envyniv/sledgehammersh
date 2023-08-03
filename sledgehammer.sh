@@ -1,10 +1,5 @@
 #!/usr/bin/env bash
 
-#This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
-#This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-#You should have received a copy of the GNU General Public License along with this program. If not, see <https://www.gnu.org/licenses/>.
-
-
 # References for implementation:
 # https://developer.valvesoftware.com/wiki/SteamCMD
 # https://gist.github.com/dgibbs64/79a7f3ab3c96a48275c4
@@ -21,13 +16,6 @@
 # - 3 - Winetricks not installable?
 # - 4 - going to the game bin folder fails
 # - 5 - no STEAM_GAMES_FOLDER
-
-progname="SledgeHammer.sh"
-
-[ "$DEBUG" ] && set -x
-
-# watchdog is enabled by default except if explicitly disabled
-WATCHDOG=${WATCHDOG:-"t"}
 
 function echo_error() {
 	local RED='\033[0;31m'
@@ -53,19 +41,19 @@ function setGame() {
 			;;
 	esac
 	_gamepath="$STEAM_GAMES_FOLDER/$FOLDER_NAME"
-	# e.g. $HOME/.HammerEditor-tf2; $HOME/.HammerEditor-csgo;
-	# _wineprefix=$HOME/.HammerEditor-$GAME
-	unset FOLDER_NAME
+	export FOLDER_NAME
 }
 
 # function edited from https://stackoverflow.com/a/44243842
 function getLatestHPP() {
+	local installedhppver=$XDG_CONFIG_HOME/hammer/$GAME/.hppver
+	# TODO: check for newer version and install
+	[ -f "$installedhppver" ] && return
 	echo_error Downloading latest Hammer++
 	
   local owner=ficool2 project=HammerPlusPlus-Website
-  local release_url
+  local release_url release_tag
   release_url=$(curl -Ls -o /dev/null -w %'{url_effective}' "https://github.com/$owner/$project/releases/latest")
-  local release_tag
   release_tag=$(basename "$release_url")
   local tgt_file="hammerplusplus_${GAME}_build${release_tag}"
   wget "https://github.com/$owner/$project/releases/download/$release_tag/$tgt_file.zip" -P "/tmp/"
@@ -73,7 +61,8 @@ function getLatestHPP() {
   mv -f "/tmp/$tgt_file/bin"/* "$_gamepath/bin"
   rm -rf "/tmp/$tgt_file"
   rm "/tmp/$tgt_file.zip"
-  ln -s "$_gamepath/bin/hammerplusplus" "$XDG_CONFIG_HOME"
+  ln -s "$_gamepath/bin/hammerplusplus" "$XDG_CONFIG_HOME/hammer/$GAME"
+  echo "$release_tag" >"$installedhppver"
 
 	echo_error \
 		"Changing necessary settings to have the 'Run Map...' button working properly"
@@ -84,7 +73,7 @@ function getLatestHPP() {
 	#					 TO FIX THIS ISSUE, WE SUPERSET CONHOST ENTIRELY, SEEING AS
 	# 				 HAMMER++ DOES NOT EVEN NEED CONHOST TO HAVE RUN PROPERLY IN ORDER TO
 	#					 CONTINUE EXECUTION.
-	#	FIX:		 SEE FUNCTION `hammerWatchdog`.
+	#	FIX:		 SEE `hammerd.sh`.
 	#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   #dumb replace all instances of '$game_exe' with 'start /unix $game_exe'
   #shellcheck disable=SC2016
@@ -92,12 +81,10 @@ function getLatestHPP() {
   #	"$XDG_CONFIG_HOME"/hammerplusplus/hammerplusplus_sequences.cfg
 
   #also add .vmf to all '$file' instances
-  perl -pi -e 's/(?<!\s)\$file(?!.bsp)/$file.vmf/' \
-  	"$XDG_CONFIG_HOME"/hammerplusplus/hammerplusplus_sequences.cfg
+  perl -pi -e 's/(?<!\s)\$file(?!.bsp)/$file.vmf/' "$SEQUENCESFILE"
 
   #set expert run mode by default
-  sed -i -e 's/ModeExpert=0/ModeExpert=1/' \
-  	"$XDG_CONFIG_HOME"/hammerplusplus/hammerplusplus_settings.ini
+  sed -i -e 's/ModeExpert=0/ModeExpert=1/' "$SETTINGSFILE"
 
   # compiled maps in custom folder to avoid contaminating game folders
 }
@@ -130,196 +117,69 @@ function run_steamcmd {
 		+quit
 }
 
-function packageManager() {
-	for entry in "${HAMMER_DOWNLOADS[@]}"; do
-		if [[ $entry =~ .+\.[0-9]+ ]]; then
-			#tf2maps entry
-			curl "https://tf2maps.net/downloads/$entry" | grep -P -o '(?<=<div class="bbWrapper">)[\s\S]+(?=<\/div>)'
-		else
-			echo_error "Link format not recognized for entry \"$entry\". Skipping."
-			continue
-		fi
-	done
-	[ "$PKGMANONLY" ] && exit 0
-}
-
-function hammerWatchdog() (
-
-	SETTINGSFILE="$XDG_CONFIG_HOME"/hammerplusplus/hammerplusplus_settings.ini
-	SEQUENCESFILE="$XDG_CONFIG_HOME"/hammerplusplus/hammerplusplus_sequences.cfg
-	# allow process management
-	set -m
-	
-	progname="SledgeHammer Watchdog"
-
-	echo_wd() {
-		BLUE='\033[1;34m'
-		CLEAR='\033[0m'
-		echo -e "${BLUE}[ $progname ] $*${CLEAR}" 1>&2
-	}
-
-	getConhost() {
-		# This is objectively the wrong way to grab conhost, because this could return literally
-		# any instance of conhost, even those not spawned by hammer.
-
-		# However, since wine disconnects from stdout, there is literally nothing i can do to
-		# grab the PPID and compare.
-
-		# basically, this is the best we get
-		pgrep -x 'conhost\.exe' | tail -n1
-	}
-
-	getSequence() {
-		echo_wd "Reading last used sequence id."
-		seqnum=$(grep -o -P '(?<=LastSequence=)\d+' "$SETTINGSFILE")
-		echo_wd "Reading last used sequence from json"
-		parseSequence
-	}
-
-	fixCommand() {
-		# replace arbitrary integers with actual commands
-		case $cmd in
-			257)
-				cmd="cp -f"
-				;;
-			256)
-				cmd="cd"
-				;;
-			258)
-				cmd="rm"
-				;;
-			259)
-				cmd="mv"
-				;;
-			*)
-				winepath -u $cmd 2>/dev/null
-				;;
-		esac
-
-		
-		# replace instances of envvars with actual files
-		#parms=${\$game_exe/$parms//$game_exe/}
-		#parms=${\$game_exe/$parms//$game_exe/}
-		#parms=${\$game_exe/$parms//$game_exe/}
-
-		echo "$cmd $parms"
-	}
-
-	parseSequence() {
-		declare -a sequence
-		#get line number of last sequence
-		linenum=$(grep -m "$((seqnum+1))" -n -o '(?<=^\t{1}").+(?=")' "$SEQUENCESFILE" | \
-			tail -n1 | cut -d: -f1)
-		# we get the text in that sequence, then flatten it
-		offset=$((linenum+2))
-		values=$( \
-			tail -n+"$offset" "$SETTINGSFILE" | \
-			head -n$(( \
-				$(grep -m1 -n -o -P '^\t\}' "$SETTINGSFILE" | \
-				cut -d: -f1) - offset )) | \
-			perl -p -e 's/\s+(?=[\"\{\}])//g' \
-			)
-		entries=$(echo "$values" | grep -P -c '\"\d\"')
-
-		#$bspdir
-		#$file
-		#$path
-		#$bsp_exe
-		#$vis_exe
-		#$light_exe
-	}
-
-	parseEntries() {
-		entry=0
-		while [ "$entries" -gt "$entry" ]; do
-			# https://developer.valvesoftware.com/wiki/Hammer_Run_Map_Expert
-			entry_data="$(echo "$entries" | tail -n"$( grep -c '\{')")"
-			# check if enabled
-			if echo "$entry_data" | grep -P -o '(?<=enable\"\")1(?=\")'; then
-				
-				# element is enabled, collect data to parse
-				cond=$(echo "$entry_data" | grep -P -o '(?<=\"specialcmd\"{2}).+(?=\")')
-				if [ "$cond" == "0" ]; then
-					# command has specialrun attrib. takes priority over run.
-					cmd=$cond
-				else
-					# command calls to executable
-					cmd=$(echo "$entry_data" | grep -P -o '(?<=\"run\"{2}).+(?=\")')
-				fi
-				parms=$(echo "$entry_data" | \
-					grep -P -o '(?<=\"parms\"{2}).+(?=\")' | tail -n1)
-				sequence["$entry"]=fixCommand
-				
-				else
-					continue
-			fi
-			entry=$(( entry + 1 ))
-		done
-	}
-
-	execSequence () {
-		for cmd in "${sequence[@]}"; do
-			eval "$cmd"
-		done
-	}
-
-	process() {
-		echo_wd "Started Watchdog"
-	
-		while true; do
-			if getConhost; then
-				pid=$(getConhost)
-				break
-			fi
-		done
-	
-		echo_wd "Found conhost.exe; replacing"
-		kill "$pid"
-	
-		echo_wd "Reading sequence from hammerplusplus cfgs"
-		getSequence
-	
-		parseEntries
-	
-		execSequence
-	}
-
-	process
-	
-)
-
 function hammerplusplus_cmd() {
+	WINEPREFIX=$_wineprefix wine cmd /c start hammerplusplus.exe 2>/dev/null
 	if [ "$WATCHDOG" = "t" ]; then
-		set -m
 		echo_error "Starting Watchdog, please close all other WINE processes"
 		echo_error "To avoid killing the wrong things when time comes."
 		echo_error
 		echo_error "See getConhost() for a worse explanation."
-		hammerWatchdog &
-		pid=$!
+		# No need to start watchdog in the background since
+		# wine commands don't hold stdout
+		"$SLEDGEHAMMER"/hammerd.sh
 	fi
-	WINEPREFIX=$_wineprefix wine cmd /c start hammerplusplus.exe 2>/dev/null
-	if [ "$WATCHDOG" = "t" ]; then
-		echo_error Killing Watchdog
-		kill "$pid"
-		set +m
-	fi
-	}
+}
+
+function generateDesktopFile() {
+	checkInstalled gendesk || getPackage gendesk
+	[ -f "$SLEDGEHAMMER/favicon.ico" ] || \
+	wget https://raw.githubusercontent.com/ficool2/HammerPlusPlus-Website/main/images/favicon.ico
+	gendesk -n --name="$FOLDER_NAME Hammer++" \
+		--comment="Hammer++, tuned for $GAME" \
+		--terminal=true --path="$SLEDGEHAMMER" \
+		--icon=favicon.ico \
+		--genericname="VMF Map Editor" \
+		--exec="$SLEDGEHAMMER/sledgehammer.sh"
+}
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+SLEDGEHAMMER=$(realpath "$(dirname "${BASH_SOURCE[0]}")")
+export DEBUG SLEDGEHAMMER
+
+progname="SledgeHammer.sh"
+
+[ "$DEBUG" ] && set -x
+
+# watchdog is enabled by default except if explicitly disabled
+WATCHDOG=${WATCHDOG:-"t"}
+
+STEAMLOC=$XDG_CONFIG_HOME/hammer/.steamlocation
+
 # if no steam games folder (**/common) has been provided, error out.
-[ ! "$STEAM_GAMES_FOLDER" ] && echo_error "No STEAM_GAMES_FOLDER provided." && exit 5
+if [ ! "$STEAM_GAMES_FOLDER" ]; then
+	if [ ! -f "$STEAMLOC" ]; then
+		echo_error "No STEAM_GAMES_FOLDER provided." && exit 5
+	else
+		STEAM_GAMES_FOLDER=$(<STEAMLOC)
+	fi
+fi
+
+echo "$STEAM_GAMES_FOLDER" >"$STEAMLOC"
 
 [ ! "$GAME" ] && GAME="tf2"
 setGame
+
+export SETTINGSFILE=$XDG_CONFIG_HOME/hammer/$GAME/hammerplusplus_settings.ini
+export SEQUENCESFILE=$XDG_CONFIG_HOME/hammer/$GAME/hammerplusplus_sequences.cfg
+export GAMECFGFILE=$XDG_CONFIG_HOME/hammer/$GAME/hammerplusplus_gameconfig.txt
 
 _wineprefix=$HOME/.wine-HammerEditor
 
 # source configuration specific functions
 # shellcheck source=/dev/null
-. "${XDG_CONFIG_HOME:-$HOME}/hammer.cfg"
+. "$XDG_CONFIG_HOME/hammer/hammer.cfg"
 
 #packageManager
 
@@ -344,9 +204,8 @@ if checkInstalled steamcmd; then
 		else
 			yes_or_no "Are you fine with killing all steam instances?" && killall steam
 		fi
-		# match will be "/home/user/Steamfolder/steamcmd/linux32\steamapps\content\app_appnum\depot_depotnum"
 		DOWNDEPOT=$(run_steamcmd | grep -P -o '(?<=Depot download complete : \").+(?=\")')
-		# fix all slash bullshittery
+		# while the path is a unix path, slashes will be mixed; this fixes them.
 		DOWNDEPOT="${DOWNDEPOT//\\//}"
 	fi
 else
@@ -370,8 +229,11 @@ else
 fi
 
 [[ $FIRST_TIME_SETUP = true ]] && softlinkAll
-[[ $FIRST_TIME_SETUP = true ]] && getLatestHPP
+getLatestHPP
+# executes postInstall if defined (preferrably in hammer.cfg)
+[[ $FIRST_TIME_SETUP = true ]] && type postInstall &>/dev/null && postInstall
 
+[[ $FIRST_TIME_SETUP = true ]] && generateDesktopFile
 oldpwd=$PWD
 #cd shouldn't fail, but if it does, we'll know
 cd "$_gamepath/bin" || exit 4
@@ -386,3 +248,6 @@ hammerplusplus_cmd
 cd "$oldpwd" || exit
 
 set +x
+
+# clear exported variables just to be safe
+unset DEBUG SLEDGEHAMMER FOLDER_NAME
