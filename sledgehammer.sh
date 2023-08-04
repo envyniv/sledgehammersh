@@ -12,9 +12,7 @@
 
 # ERROR CODE DOCUMENTATION:
 # - 1 - invalid GAME provided
-# - 2 - SteamCMD not installable?
-# - 3 - Winetricks not installable?
-# - 4 - going to the game bin folder fails
+# - 4 - cd'ing around fails
 # - 5 - no STEAM_GAMES_FOLDER
 
 function echo_error() {
@@ -24,61 +22,38 @@ function echo_error() {
 }
 
 function setGame() {
-	case $GAME in
+	case ${GAME:=tf2} in
 		tf2)
 			APP=440
 			DEPOT=232251
-			FOLDER_NAME="Team Fortress 2"
+			FANCYNAME="Team Fortress 2"
 			;;
 		csgo)
 			APP=730
 			DEPOT=732
-			FOLDER_NAME="Counter-Strike Global Offensive"
+			FANCYNAME="Counter-Strike Global Offensive"
 			;;
 		*)
 			echo_error "Invalid game. Interrupting operation."
 			exit 1
 			;;
 	esac
-	_gamepath="$STEAM_GAMES_FOLDER/$FOLDER_NAME"
-	export FOLDER_NAME
+	_gamepath="$STEAM_GAMES_FOLDER/$FANCYNAME"
+	export FANCYNAME
 }
 
-# function edited from https://stackoverflow.com/a/44243842
-function getLatestHPP() {
-	local installedhppver=$XDG_CONFIG_HOME/hammer/$GAME/.hppver
-	# TODO: check for newer version and install
-	[ -f "$installedhppver" ] && return
-	echo_error Downloading latest Hammer++
-	
-  local owner=ficool2 project=HammerPlusPlus-Website
-  local release_url release_tag
-  release_url=$(curl -Ls -o /dev/null -w %'{url_effective}' "https://github.com/$owner/$project/releases/latest")
-  release_tag=$(basename "$release_url")
-  local tgt_file="hammerplusplus_${GAME}_build${release_tag}"
-  wget "https://github.com/$owner/$project/releases/download/$release_tag/$tgt_file.zip" -P "/tmp/"
-  unzip "/tmp/$tgt_file.zip" -d "/tmp/"
-  mv -f "/tmp/$tgt_file/bin"/* "$_gamepath/bin"
-  rm -rf "/tmp/$tgt_file"
-  rm "/tmp/$tgt_file.zip"
-  ln -s "$_gamepath/bin/hammerplusplus" "$XDG_CONFIG_HOME/hammer/$GAME"
-  echo "$release_tag" >"$installedhppver"
-
+function patchHPPSettings() {
 	echo_error \
 		"Changing necessary settings to have the 'Run Map...' button working properly"
 
-	# WARNING: THIS DOES NOT WORK - HAMMER SPAWNS CONHOST WHICH `cd`s
-	#					 INTO COMMANDS PROVIDED, STRIPPING EXECUTABLE NAMES
+	# WARNING: TRYING TO START THE GAME NATIVELY FROM HAMMER (start /unix $game_exe) 
+	#					 DOES NOT WORK - HAMMER SPAWNS CONHOST WHICH `cd`s
+	#					 INTO THE PATH OF COMMANDS PROVIDED, STRIPPING EXECUTABLE NAMES
 	#					 WHICH MEANS WE CANNOT USE A NATIVE SOLUTION IN ORDER TO SPAWN THE GAME.
 	#					 TO FIX THIS ISSUE, WE SUPERSET CONHOST ENTIRELY, SEEING AS
 	# 				 HAMMER++ DOES NOT EVEN NEED CONHOST TO HAVE RUN PROPERLY IN ORDER TO
 	#					 CONTINUE EXECUTION.
-	#	FIX:		 SEE `hammerd.sh`.
-	#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  #dumb replace all instances of '$game_exe' with 'start /unix $game_exe'
-  #shellcheck disable=SC2016
-  #sed -i -e 's/$game_exe/start \/unix $game_exe/' \
-  #	"$XDG_CONFIG_HOME"/hammerplusplus/hammerplusplus_sequences.cfg
+	#	    		 SEE `hammerd.sh` FOR ADDITIONAL DETAILS.
 
   #also add .vmf to all '$file' instances
   perl -pi -e 's/(?<!\s)\$file(?!.bsp)/$file.vmf/' "$SEQUENCESFILE"
@@ -87,6 +62,38 @@ function getLatestHPP() {
   sed -i -e 's/ModeExpert=0/ModeExpert=1/' "$SETTINGSFILE"
 
   # compiled maps in custom folder to avoid contaminating game folders
+}
+
+function downloadHPP() {
+	local tgt_file="hammerplusplus_${GAME}_build${release_tag}"
+  wget "https://github.com/$owner/$project/releases/download/$release_tag/$tgt_file.zip" -P "/tmp/"
+  unzip "/tmp/$tgt_file.zip" -d "/tmp/"
+  mv -f "/tmp/$tgt_file/bin"/* "$_gamepath/bin"
+  rm -rf "/tmp/$tgt_file"
+  rm "/tmp/$tgt_file.zip"
+  ln -s "$_gamepath/bin/hammerplusplus" "$XDG_CONFIG_HOME/hammer/$GAME"
+  echo "$release_tag" >"$installedhppver"
+
+	[[ $FIRST_TIME_SETUP = true ]] && patchHPPSettings
+}
+
+# function edited from https://stackoverflow.com/a/44243842
+function getLatestHPP() {
+	local installedhppver=$CONFIGFDL/$GAME/.hppver ver=0
+	# TODO: check for newer version and install
+	[ -f "$installedhppver" ] && ver=$(<"$installedhppver")
+
+	echo_error Getting latest Hammer++
+	
+  local owner=ficool2 project=HammerPlusPlus-Website
+  local release_url release_tag
+  release_url=$(curl -Ls -o /dev/null -w %'{url_effective}' "https://github.com/$owner/$project/releases/latest")
+  release_tag=$(basename "$release_url")
+  if [[ $release_tag -gt $ver ]]; then
+		downloadHPP
+  else
+  	echo_error "You already have the latest version."
+  fi
 }
 
 function softlinkAll() {
@@ -119,83 +126,30 @@ function run_steamcmd {
 
 function hammerplusplus_cmd() {
 	WINEPREFIX=$_wineprefix wine cmd /c start hammerplusplus.exe 2>/dev/null
-	if [ "$WATCHDOG" = "t" ]; then
-		echo_error "Starting Watchdog, please close all other WINE processes"
-		echo_error "To avoid killing the wrong things when time comes."
-		echo_error
-		echo_error "See getConhost() for a worse explanation."
+	#if [ "$WATCHDOG" = "t" ]; then
+	#	echo_error "Starting Watchdog, please close all other WINE processes"
+	#	echo_error "To avoid killing the wrong things when time comes."
+	#	echo_error
+	#	echo_error "See getConhost() for a worse explanation."
 		# No need to start watchdog in the background since
 		# wine commands don't hold stdout
-		"$SLEDGEHAMMER"/hammerd.sh
-	fi
+	#	"$SLEDGEHAMMER"/hammerd.sh
+	#fi
 }
 
 function generateDesktopFile() {
-	checkInstalled gendesk || getPackage gendesk
 	[ -f "$SLEDGEHAMMER/favicon.ico" ] || \
 	wget https://raw.githubusercontent.com/ficool2/HammerPlusPlus-Website/main/images/favicon.ico
-	gendesk -n --name="$FOLDER_NAME Hammer++" \
+	gendesk -n -q --name="Hammer++ ($FANCYNAME)" \
 		--comment="Hammer++, tuned for $GAME" \
 		--terminal=true --path="$SLEDGEHAMMER" \
-		--icon=favicon.ico \
+		--icon="$SLEDGEHAMMER/favicon.ico" \
 		--genericname="VMF Map Editor" \
-		--exec="$SLEDGEHAMMER/sledgehammer.sh"
+		--exec="bash -c \"GAME=$GAME $SLEDGEHAMMER/$progname\""
+	mv PKGBUILD.desktop "$HOME/.local/share/applications/hammer-$GAME.desktop"
 }
 
-
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-SLEDGEHAMMER=$(realpath "$(dirname "${BASH_SOURCE[0]}")")
-export DEBUG SLEDGEHAMMER
-
-progname="SledgeHammer.sh"
-
-[ "$DEBUG" ] && set -x
-
-# watchdog is enabled by default except if explicitly disabled
-WATCHDOG=${WATCHDOG:-"t"}
-
-STEAMLOC=$XDG_CONFIG_HOME/hammer/.steamlocation
-
-# if no steam games folder (**/common) has been provided, error out.
-if [ ! "$STEAM_GAMES_FOLDER" ]; then
-	if [ ! -f "$STEAMLOC" ]; then
-		echo_error "No STEAM_GAMES_FOLDER provided." && exit 5
-	else
-		STEAM_GAMES_FOLDER=$(<STEAMLOC)
-	fi
-fi
-
-echo "$STEAM_GAMES_FOLDER" >"$STEAMLOC"
-
-[ ! "$GAME" ] && GAME="tf2"
-setGame
-
-export SETTINGSFILE=$XDG_CONFIG_HOME/hammer/$GAME/hammerplusplus_settings.ini
-export SEQUENCESFILE=$XDG_CONFIG_HOME/hammer/$GAME/hammerplusplus_sequences.cfg
-export GAMECFGFILE=$XDG_CONFIG_HOME/hammer/$GAME/hammerplusplus_gameconfig.txt
-
-_wineprefix=$HOME/.wine-HammerEditor
-
-# source configuration specific functions
-# shellcheck source=/dev/null
-. "$XDG_CONFIG_HOME/hammer/hammer.cfg"
-
-#packageManager
-
-# detect first usage - check if wineprefix exists
-[ ! -d "$_wineprefix" ] && FIRST_TIME_SETUP=true
-
-# check if steamcmd and winetricks are installed, if not, install them
-declare -a a=( steamcmd winetricks wine-mono )
-for needed in "${a[@]}"; do
-	if ! checkInstalled "$needed"; then
-		getPackage "$needed"
-	fi
-done
-unset a
-
-if checkInstalled steamcmd; then
+function installDepot() {
 	# Note: A user can only be logged in once at any time (counting both graphical client as well as SteamCMD logins).
 	# for ^this^ reason, we are going to close steam.
 	if [[ $FIRST_TIME_SETUP = true ]]; then
@@ -208,12 +162,9 @@ if checkInstalled steamcmd; then
 		# while the path is a unix path, slashes will be mixed; this fixes them.
 		DOWNDEPOT="${DOWNDEPOT//\\//}"
 	fi
-else
-	echo_error "SteamCMD missing after supposed installation."
-	exit 2
-fi
+}
 
-if checkInstalled winetricks; then
+function makePrefix() {
 	# if used for the first time, install packages in the wine prefix
 	if [[ $FIRST_TIME_SETUP = true ]]; then
 		WINEARCH=win32 WINEPREFIX=$_wineprefix wine wineboot
@@ -221,12 +172,62 @@ if checkInstalled winetricks; then
 			dotnet48 vcrun2003 vcrun2005 \
 			vcrun2008 vcrun2010 vcrun2012 \
 			vcrun2013 vcrun2015
-		#dotnet20
+		#dotnet20 is broken and unneeded
 	fi
-else
-	echo_error "Winetricks missing after supposed installation."
-	exit 3
-fi
+}
+
+function getScriptDeps() {
+	# check if steamcmd and winetricks are installed, if not, install them
+	declare -a a=( steamcmd winetricks wine-mono gendesk )
+	for needed in "${a[@]}"; do
+		if ! checkInstalled "$needed"; then
+			getPackage "$needed"
+		fi
+	done
+	unset a
+}
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+CONFIGFDL=$XDG_CONFIG_HOME/hammer
+
+# source configuration specific functions
+# (i am forced to use /dev/null because my editor acts weird with shellcheck)
+# shellcheck source=/dev/null
+. "$CONFIGFDL/hammer.cfg"
+setGame
+
+SLEDGEHAMMER=$(realpath "$(dirname "${BASH_SOURCE[0]}")")
+cd "$SLEDGEHAMMER" || exit 4
+
+export DEBUG SLEDGEHAMMER
+
+progname=$(basename "$0")
+
+[ "$DEBUG" ] && set -x
+
+# watchdog is enabled by default except if explicitly disabled
+WATCHDOG=${WATCHDOG:-"t"}
+
+# if no steam games folder (**/common) has been provided, error out.
+[ ! "$STEAM_GAMES_FOLDER" ] && \
+	echo_error "No STEAM_GAMES_FOLDER provided." && exit 5
+
+
+export SETTINGSFILE=$CONFIGFDL/$GAME/hammerplusplus_settings.ini
+export SEQUENCESFILE=$CONFIGFDL/$GAME/hammerplusplus_sequences.cfg
+export GAMECFGFILE=$CONFIGFDL/$GAME/hammerplusplus_gameconfig.txt
+
+_wineprefix=$HOME/.wine-HammerEditor
+
+# detect first usage - check if wineprefix exists
+[ ! -d "$_wineprefix" ] && FIRST_TIME_SETUP=true
+
+getScriptDeps
+
+installDepot
+makePrefix
 
 [[ $FIRST_TIME_SETUP = true ]] && softlinkAll
 getLatestHPP
@@ -250,4 +251,4 @@ cd "$oldpwd" || exit
 set +x
 
 # clear exported variables just to be safe
-unset DEBUG SLEDGEHAMMER FOLDER_NAME
+unset DEBUG SLEDGEHAMMER FANCYNAME

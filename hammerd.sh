@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 
-# SETTINGSFILE SEQUENCESFILE GAMECFGFILE are exported by the main script
+# SETTINGSFILE, SEQUENCESFILE and GAMECFGFILE are exported by the main script
 
-# allow process management
 [ "$DEBUG" ] && set -x
+# allow process management
 set -m
 
-progname="SledgeHammer Watchdog"
+progname=$(basename "$0")
 
 function echo_wd() {
 	local BLUE='\033[1;34m'
@@ -32,11 +32,11 @@ function getConhost() {
 function getSequence() {
 	echo_wd "Reading last used sequence id."
 	seqnum=$(grep -o -P '(?<=LastSequence=)\d+' "$SETTINGSFILE")
-	echo_wd "Reading last used sequence from json"
+	echo_wd "Reading last used sequence from cfg"
 	parseSequence
 }
 
-function fixCommand() {
+function parseCommand() {
 	# replace arbitrary integers with actual commands
 	case $cmd in
 		257)
@@ -60,8 +60,7 @@ function fixCommand() {
 			cmd=$(winepath -u "$cmd" 2>/dev/null)
 			;;
 	esac
-
-	echo "$cmd $parms"
+	$cmd $parms
 }
 
 function getValueOf() {
@@ -78,7 +77,6 @@ function getSettingsValue() {
 }
 
 function parseSequence() {
-	declare -a sequence
 	#get line number of last sequence
 	linenum=$(grep -m "$((seqnum+1))" -n -o '(?<=^\t{1}").+(?=")' "$SEQUENCESFILE" | \
 		tail -n1 | cut -d: -f1)
@@ -114,24 +112,26 @@ function parseSequence() {
 	parseEntries
 }
 
+function getEntry() {
+	local entry_line_number
+	entry_line_number=$( grep -c "\"$entry\"" | cut -d: -f1)
+	echo "$entries" | tail -n+"$entry_line_number" | head -n""
+}
+
 function parseEntries() {
 	entry=0
 	while [ "$entries" -gt "$entry" ]; do
 		# https://developer.valvesoftware.com/wiki/Hammer_Run_Map_Expert
-		buffer="$(echo "$entries" | tail -n"$( grep -c '\{')")"
-		# check if enabled
+		buffer=$(getEntry)
 		if [ "$(getValueOf enable)" == 1 ]; then
-			
-			# element is enabled, collect data to parse
+			# entry is enabled, collect data to parse
 			cmd=$(getValueOf specialcmd)
 			[ "$cmd" == "0" ] && cmd=$(getValueOf run)
 			parms=$(getValueOf parms)
 			
-			fixCommand
-
-			$cmd
-			else
-				continue
+			parseCommand
+		else
+			continue
 		fi
 		unset buffer
 		entry=$(( entry + 1 ))
