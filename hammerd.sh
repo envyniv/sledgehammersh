@@ -5,6 +5,7 @@
 [ "$DEBUG" ] && set -x
 # allow process management
 set -m
+set -e
 
 progname=$(basename "$0")
 
@@ -15,7 +16,7 @@ function echo_wd() {
 }
 
 function getEditor() {
-	pgrep -x 'hammerplusplus\.' | tail -n1
+	pgrep -x 'hammerplusplus.' | tail -n1 >/dev/null
 }
 
 function getConhost() {
@@ -141,23 +142,28 @@ function parseEntries() {
 	process
 }
 
+function end() {
+	echo_wd "Editor MIA. Stopping Watchdog..."
+	exit
+}
+
 function process() {
 	echo_wd "Started Watchdog"
 
 	while getEditor; do
-		if getConhost; then
-			#pid=$(getConhost)
-			break
-		fi
+		#getConhost && break
+		bash_pid=$$
+		ps -eo ppid | grep -w $bash_pid
 	done
-	getEditor || echo_wd "Editor MIA. Stopping Watchdog..." && exit
+	#getEditor || end
 
-	echo_wd "Found conhost.exe; replacing"
+	#echo_wd "Found conhost.exe; replacing"
 	#kill "$pid"
-	pkill -f "conhost\.exe"
+	#pkill -f "conhost\.exe"
 
-	echo_wd "Reading sequence from hammerplusplus cfgs"
-	getSequence
+	#echo_wd "Reading sequence from hammerplusplus cfgs"
+	#getSequence
 }
 
+sleep 1
 process

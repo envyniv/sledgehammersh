@@ -71,7 +71,7 @@ function downloadHPP() {
   mv -f "/tmp/$tgt_file/bin"/* "$_gamepath/bin"
   rm -rf "/tmp/$tgt_file"
   rm "/tmp/$tgt_file.zip"
-  ln -s "$_gamepath/bin/hammerplusplus" "$XDG_CONFIG_HOME/hammer/$GAME"
+  ln -s "$_gamepath/bin/hammerplusplus" "${XDG_CONFIG_HOME:=$HOME/.config}/hammer/$GAME"
   echo "$release_tag" >"$installedhppver"
 
 	[[ $FIRST_TIME_SETUP = true ]] && patchHPPSettings
@@ -100,6 +100,7 @@ function softlinkAll() {
 	echo_error \
 		"Soft linking all files from the depot folder over to the game folder."
 	cp -rs "${DOWNDEPOT}"/* "$_gamepath/"
+	generateDesktopFile
 }
 
 function yes_or_no {
@@ -125,6 +126,7 @@ function run_steamcmd {
 }
 
 function hammerplusplus_cmd() {
+	#WINEPREFIX=~/.wine-HammerEditor wineserver -f
 	WINEPREFIX=$_wineprefix wine cmd /c start hammerplusplus.exe 2>/dev/null
 	#if [ "$WATCHDOG" = "t" ]; then
 	#	echo_error "Starting Watchdog, please close all other WINE processes"
@@ -152,28 +154,25 @@ function generateDesktopFile() {
 function installDepot() {
 	# Note: A user can only be logged in once at any time (counting both graphical client as well as SteamCMD logins).
 	# for ^this^ reason, we are going to close steam.
-	if [[ $FIRST_TIME_SETUP = true ]]; then
-		if [[ $UNATTENED = true ]]; then
-			killall steam
-		else
-			yes_or_no "Are you fine with killing all steam instances?" && killall steam
-		fi
-		DOWNDEPOT=$(run_steamcmd | grep -P -o '(?<=Depot download complete : \").+(?=\")')
-		# while the path is a unix path, slashes will be mixed; this fixes them.
-		DOWNDEPOT="${DOWNDEPOT//\\//}"
+	if [[ $UNATTENED = true ]]; then
+		killall steam
+	else
+		yes_or_no "Are you fine with killing all steam instances?" && killall steam
 	fi
+	DOWNDEPOT=$(run_steamcmd | grep -P -o '(?<=Depot download complete : \").+(?=\")')
+	# while the path is a unix path, slashes will be mixed; this fixes them.
+	DOWNDEPOT="${DOWNDEPOT//\\//}"
+	softlinkAll
 }
 
 function makePrefix() {
-	# if used for the first time, install packages in the wine prefix
-	if [[ $FIRST_TIME_SETUP = true ]]; then
-		WINEARCH=win32 WINEPREFIX=$_wineprefix wine wineboot
-		WINEPREFIX=$_wineprefix winetricks \
-			dotnet48 vcrun2003 vcrun2005 \
-			vcrun2008 vcrun2010 vcrun2012 \
-			vcrun2013 vcrun2015
-		#dotnet20 is broken and unneeded
-	fi
+	# install packages in the wine prefix
+	WINEARCH=win32 WINEPREFIX=$_wineprefix wine wineboot
+	WINEPREFIX=$_wineprefix winetricks \
+		dotnet48 vcrun2003 vcrun2005 \
+		vcrun2008 vcrun2010 vcrun2012 \
+		vcrun2013 vcrun2015
+	#dotnet20 is broken and unneeded
 }
 
 function getScriptDeps() {
@@ -190,7 +189,7 @@ function getScriptDeps() {
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-CONFIGFDL=$XDG_CONFIG_HOME/hammer
+CONFIGFDL=${XDG_CONFIG_HOME:=$HOME/.config}/hammer
 
 # source configuration specific functions
 # (i am forced to use /dev/null because my editor acts weird with shellcheck)
@@ -221,20 +220,16 @@ export GAMECFGFILE=$CONFIGFDL/$GAME/hammerplusplus_gameconfig.txt
 
 _wineprefix=$HOME/.wine-HammerEditor
 
-# detect first usage - check if wineprefix exists
-[ ! -d "$_wineprefix" ] && FIRST_TIME_SETUP=true
-
 getScriptDeps
 
-installDepot
-makePrefix
+[ ! -d "$_wineprefix" ] && makePrefix
 
-[[ $FIRST_TIME_SETUP = true ]] && softlinkAll
+[[ $FIRST_TIME_SETUP = true ]] && installDepot
+
 getLatestHPP
 # executes postInstall if defined (preferrably in hammer.cfg)
 [[ $FIRST_TIME_SETUP = true ]] && type postInstall &>/dev/null && postInstall
 
-[[ $FIRST_TIME_SETUP = true ]] && generateDesktopFile
 oldpwd=$PWD
 #cd shouldn't fail, but if it does, we'll know
 cd "$_gamepath/bin" || exit 4
