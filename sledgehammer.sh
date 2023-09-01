@@ -220,6 +220,8 @@ export GAMECFGFILE=$CONFIGFDL/$GAME/hammerplusplus_gameconfig.txt
 
 _wineprefix=$HOME/.wine-HammerEditor
 
+checkInstalled distrobox
+
 getScriptDeps
 
 [ ! -d "$_wineprefix" ] && makePrefix
