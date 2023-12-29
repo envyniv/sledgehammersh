@@ -1,0 +1,93 @@
+#+title: Sledgehammer.sh
+/#+subtitle: Hammer++ <3 Linux/
+#+filetags: hammer
+
+/A tiny script for GNU/Linux systems to automatically handle the
+installation and configuration of the Hammer++ Map Editor./
+
+Mainly thought for ArchLinux+TF2 users such as myself, but contibutions
+and additions to make it work with as many games as possible is
+appreciated.
+
+* Configuration
+To make this script as compatible with as many devices and
+configurations possible, we require a =hammer.cfg= file to be present in
+your =XDG_CONFIG_HOME= directory.
+
+This file should contain the following:
+
+#+begin_src bash
+#!/usr/bin/env bash
+# The shebang is present because this is actually
+# a shell script to be sourced by the main script
+
+function getSteamUser() {
+    # This function should print out Your
+    # Steam account's username.
+    echo . . .
+}
+
+function getSteamPass() {
+    # This function should print out Your
+    # Steam account's password.
+    echo . . .
+}
+
+function getSteamGuard() {
+    # This function should print out Your
+    # Steam account's Steam Guard code.
+    echo . . .
+}
+
+function checkInstalled () {
+    # This function should merely execute the package manager of choice,
+    # Checking for installed packages.
+    pacman -Q "$1"
+}
+
+function getPackage() {
+    # This is a bit more important than the rest.
+    # This handles the installation of dependencies needed by the script.
+    # Handle this carefully.
+}
+#+end_src
+
+* Features
+
+** Manage multiple hammer++ installs
+
+*** TODO verify this works as expected
+
+** TODO [#B] AUR package?
+
+Would be cool to have this on the AUR.
+
+** TODO [#A] make config file if not present
+
+To ease initial setup, error out on first use and generate config file,
+so people can more easily base themselves off the preexisting cfg and make their own
+
+** TODO [#A] try to get run map to work ([[./hammerd.sh]])
+
+I need to develop a proper way to look at processes and windows spawned by Hammer++
+
+This is especially difficult since the program is run through wine.
+
+I've tried observing ~hammerplusplus.exe~, ~conhost~, ~wine~, nothing has worked properly so far.
+
+** TODO [#B] finish distrobox support
+
+This would help make things a bit more straight-foward for end users
+
+** TODO [#C] support [[https://tf2maps.net/threads/puddys-small-mapping-resource-pack.28626/][Puddy's pack]]
+
+Puddy's pack is an incredible collection of useful additions to the tf2 vmt,
+we need to develop a package-manager-like system that is able to download and dynamically
+manage these kinds of additions.
+
+This system should also not be limited to TF2
+
+** TODO [#C] support CS2/Source2?
+
+Need to look more into this. It would be pretty cool to have this become
+a comprehensive tool for management of S/S2 engine games.

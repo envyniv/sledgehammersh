@@ -1,6 +1,8 @@
-FROM alpine:3.18.3
+FROM steamcmd:latest
 
 MAINTAINER envyniv <envyn67@gmail.com>
 
-# install required packages
-RUN
+ARG 
+
+RUN echo ""\
+    ./steamcmd.sh +force_install_dir /home/steam/squad-dedicated +login anonymous +app_update 403240 +quit
