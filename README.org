@@ -1,5 +1,5 @@
 #+title: Sledgehammer.sh
-/#+subtitle: Hammer++ <3 Linux/
+#+subtitle: Hammer++ <3 Linux/
 #+filetags: hammer
 
 /A tiny script for GNU/Linux systems to automatically handle the
